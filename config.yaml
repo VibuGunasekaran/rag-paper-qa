@@ -39,10 +39,10 @@ retrieval:
 eval:
   gold_path: eval/gold_set.jsonl
   results_path: eval/results.md
-  # Day 3 target mix. build_gold.py --validate checks against this.
+  # Gold set target mix (150 rows). build_gold.py validate checks against this.
   target_mix:
-    single_fact: 20
-    multi_hop: 10
-    comparative: 8
-    paraphrased: 7
-    unanswerable: 5
+    single_fact: 60
+    multi_hop: 30
+    comparative: 24
+    paraphrased: 21
+    unanswerable: 15
