@@ -27,8 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import load_config, resolve
-from .index import bm25_tokenize
+from .config import load_config
+from .index import bm25_tokenize, index_dir, indexed_text
 
 METHODS = ("dense", "bm25", "hybrid")
 
@@ -93,7 +93,7 @@ class Retriever:
     def __init__(self, chunk_size: int | None = None, config=None):
         self.cfg = config or load_config()
         self.chunk_size = chunk_size or self.cfg["chunking"]["chunk_size"]
-        self.dir = resolve(self.cfg["index"]["dir"]) / str(self.chunk_size)
+        self.dir = index_dir(self.cfg, self.chunk_size)
         if not self.dir.exists():
             raise FileNotFoundError(
                 f"No index at {self.dir}. Run "
@@ -106,6 +106,10 @@ class Retriever:
         ]
         self.by_id = {c["chunk_id"]: c for c in self.chunks}
         self.ids = [c["chunk_id"] for c in self.chunks]
+        # The reranker must see the same text the index was built from.
+        meta_path = self.dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        self.title_prefix = bool(meta.get("title_prefix"))
         self._faiss = None
         self._encoder = None
         self._bm25 = None
@@ -219,7 +223,7 @@ class Retriever:
 
         if rerank and candidates:
             t = time.perf_counter()
-            pairs = [(query, self.by_id[cid]["text"]) for cid, _ in candidates]
+            pairs = [(query, indexed_text(self.by_id[cid], self.title_prefix)) for cid, _ in candidates]
             ce_scores = self.reranker.predict(pairs)
             candidates = sorted(
                 zip([c for c, _ in candidates], [float(s) for s in ce_scores]),

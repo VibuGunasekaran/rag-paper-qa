@@ -4,8 +4,8 @@ Retrieval augmented question answering over a corpus of arXiv papers on vision
 language models and efficient inference, with a measured retrieval and
 faithfulness evaluation.
 
-> **Status: Days 1-4 complete (ingestion, indexing, retrieval, 50-row gold
-> set, 18-configuration retrieval evaluation). Next: Day 5, generation and
+> **Status: Days 1-4 complete (ingestion, indexing, retrieval, 150-question
+> gold set, 18-configuration retrieval evaluation). Next: Day 5, generation and
 > faithfulness.**
 > Numbers below are placeholders until the gold set exists. Nothing in this
 > README is a claim until it has a number next to it.
@@ -14,20 +14,22 @@ faithfulness evaluation.
 
 ## Findings
 
-Retrieval only, over 45 answerable questions: one question moves R@k by 2.2
-points, so gaps of a few points are noise.
+Retrieval only, over the 135 answerable questions of the 150-question gold set
+(one question moves R@k by 0.7 points).
 
-The table shows 6 of the 18 configurations the sweep runs (3 chunk sizes x 3
+The table shows 8 of the 18 configurations the sweep runs (3 chunk sizes x 3
 retrievers x rerank on/off); `eval/results.md` has the full grid.
 
 | Chunk | Retriever | Rerank | R@1 | R@5 | R@5 95% CI | MRR@10 | MRR@10 95% CI | nDCG@10 | p95 latency |
 |---|---|---|---|---|---|---|---|---|---|
-| 512 | Dense | No | 0.33 | 0.71 | [0.58, 0.84] | 0.482 | [0.37, 0.60] | 0.461 | 24 ms |
-| 512 | BM25 | No | 0.49 | 0.84 | [0.73, 0.93] | 0.644 | [0.53, 0.75] | 0.552 | 4 ms |
-| 512 | Hybrid | No | 0.38 | 0.80 | [0.67, 0.91] | 0.546 | [0.43, 0.66] | 0.503 | 22 ms |
-| 512 | Hybrid | Yes | 0.53 | 0.84 | [0.73, 0.93] | 0.678 | [0.57, 0.79] | 0.602 | 263 ms |
-| 256 | Hybrid | Yes | 0.51 | 0.80 | [0.67, 0.91] | 0.647 | [0.53, 0.76] | 0.553 | 165 ms |
-| 1024 | Hybrid | Yes | 0.56 | 0.91 | [0.82, 0.98] | 0.699 | [0.59, 0.80] | 0.649 | 262 ms |
+| 512 | Dense | No | 0.28 | 0.60 | [0.52, 0.68] | 0.425 | [0.36, 0.49] | 0.403 | 15 ms |
+| 512 | BM25 | No | 0.47 | 0.79 | [0.71, 0.85] | 0.598 | [0.53, 0.66] | 0.551 | 4 ms |
+| 512 | Hybrid | No | 0.38 | 0.76 | [0.69, 0.84] | 0.527 | [0.46, 0.59] | 0.495 | 19 ms |
+| 512 | Hybrid | Yes | 0.46 | 0.79 | [0.72, 0.85] | 0.603 | [0.54, 0.67] | 0.565 | 270 ms |
+| 256 | Hybrid | Yes | 0.47 | 0.78 | [0.70, 0.84] | 0.602 | [0.54, 0.67] | 0.530 | 162 ms |
+| 1024 | Hybrid | Yes | 0.43 | 0.76 | [0.69, 0.83] | 0.573 | [0.50, 0.64] | 0.547 | 262 ms |
+| 1024 | BM25 | No | 0.50 | 0.81 | [0.74, 0.87] | 0.623 | [0.56, 0.69] | 0.596 | 3 ms |
+| 1024 | BM25 | Yes | 0.42 | 0.73 | [0.66, 0.81] | 0.562 | [0.49, 0.63] | 0.536 | 254 ms |
 
 Intervals are 95% bootstraps over questions. Claims below rest on the paired
 comparisons in `eval/results.md`, which resample both configurations on the same
@@ -36,43 +38,57 @@ questions.
 Recall@5 by question type — this breakdown is where the interesting result
 lives, not in the aggregate.
 
-| Chunk | Retriever | Rerank | Single fact (20) | Multi hop (10) | Comparative (8) | Paraphrased (7) |
+| Chunk | Retriever | Rerank | Single fact (60) | Multi hop (30) | Comparative (24) | Paraphrased (21) |
 |---|---|---|---|---|---|---|
-| 512 | Dense | No | 0.80 | 0.50 | 0.88 | 0.57 |
-| 512 | BM25 | No | 0.90 | 0.90 | 1.00 | 0.43 |
-| 512 | Hybrid | No | 0.85 | 0.60 | 1.00 | 0.71 |
-| 512 | Hybrid | Yes | 0.90 | 0.80 | 0.88 | 0.71 |
-| 256 | Hybrid | Yes | 0.80 | 0.90 | 0.88 | 0.57 |
-| 1024 | Hybrid | Yes | 0.90 | 0.80 | 1.00 | 1.00 |
+| 512 | Dense | No | 0.75 | 0.63 | 0.46 | 0.29 |
+| 512 | BM25 | No | 0.92 | 0.93 | 0.75 | 0.24 |
+| 512 | Hybrid | No | 0.87 | 0.80 | 0.79 | 0.38 |
+| 512 | Hybrid | Yes | 0.90 | 0.87 | 0.71 | 0.43 |
+| 256 | Hybrid | Yes | 0.87 | 0.93 | 0.67 | 0.43 |
+| 1024 | Hybrid | Yes | 0.82 | 0.83 | 0.75 | 0.52 |
+| 1024 | BM25 | No | 0.93 | 0.90 | 0.83 | 0.29 |
+| 1024 | BM25 | Yes | 0.80 | 0.83 | 0.75 | 0.38 |
 
-Supported by paired intervals (all at 512 tokens):
+Supported by paired intervals:
 
-- **Without reranking, BM25 ranks evidence higher than dense retrieval:**
-  MRR@10 +0.16 [+0.05, +0.27]. Its R@5 lead (+0.13) is not resolved
-  [0.00, +0.29].
-- **Reranking improves ranking, not recall:** for hybrid, MRR@10 +0.13
-  [+0.01, +0.26] but R@5 +0.04 [-0.07, +0.16], at 263 ms p95 instead of 22 ms.
-- **Rank fusion without reranking ranks worse than BM25 alone:** MRR@10 -0.10
-  [-0.20, -0.00]. Adding a weaker dense ranking dilutes a stronger lexical one.
-  The interval only just excludes zero.
+- **BM25 beats dense retrieval on both recall and ranking** (512, no rerank):
+  R@5 +0.19 [+0.10, +0.27], MRR@10 +0.17 [+0.11, +0.24]. On the first 45
+  questions only the ranking gap was resolved; with 135 both are.
+- **Rank fusion without reranking ranks below BM25 alone** (512): MRR@10 -0.07
+  [-0.13, -0.01], with recall unchanged (R@5 -0.02 [-0.09, +0.05]). Adding a
+  weaker dense ranking dilutes a stronger lexical one.
+- **The reranker rescues weak first-stage rankings but adds nothing to a strong
+  one.** It raises R@5 for dense retrieval at every chunk size (+0.09 to +0.13)
+  and for every retriever at 256, but for BM25 at 512 it changes nothing
+  (R@5 -0.01 [-0.07, +0.06]).
+- **The reranker cannot read most of a long chunk.** It accepts 512 tokens, 42%
+  of 1024-token chunks are longer than that, and for 19 of 135 questions every
+  gold sentence lies past the cut-off at 1024 (none do at 256 or 512). Reranking
+  BM25 at 1024 moved R@5 by -0.07 [-0.15, +0.01], not resolved, but 9 of the 20
+  questions it lost had evidence only past the cut-off, against a 14% base rate.
 
 Not supported (intervals include zero):
 
-- **Hybrid + rerank vs plain BM25:** R@5 +0.00 [-0.11, +0.11], MRR@10 +0.03
-  [-0.08, +0.16]. BM25 alone finds evidence as often at 1/65 of the latency.
-- **Chunk size:** 1024 vs 512 (hybrid + rerank) R@5 +0.07 [-0.04, +0.18];
-  256 vs 512 R@5 -0.04 [-0.18, +0.07]. No "best configuration" can be named.
-- **Any per-question-type difference:** 7 to 20 questions per type.
+- **Hybrid + rerank vs plain BM25** (512): R@5 +0.00 [-0.07, +0.07], MRR@10
+  +0.01 [-0.06, +0.06]. BM25 alone finds and ranks evidence as well, at 4 ms p95
+  instead of 270 ms.
+- **Chunk size** (hybrid + rerank): 256 vs 512 R@5 -0.01 [-0.07, +0.05], 1024 vs
+  512 R@5 -0.02 [-0.10, +0.05]. Any real effect is small.
+- **Dense beating BM25 on paraphrased questions:** dense minus BM25 R@5 is +0.05
+  to +0.14 across chunk sizes and rerank settings, and every interval includes
+  zero (21 questions).
 
-Observations that need more data or an experiment:
+Observations:
 
-- **Comparative questions are rarely fully covered:** the best Cov@5 is 0.38
-  (3 of 8); the top 5 usually holds evidence for only one of the two papers.
-- **The most persistent miss is a naming gap:** q017 is missed in 15 of 18
-  configurations because the evidence chunk never mentions "ST3"; the name is
-  only in the paper title, which is not part of chunk text. q012 (LLaVA, 11 of
-  18) has the same shape. Prepending the paper title to each chunk before
-  indexing is the next experiment.
+- **Paraphrased questions are the weak spot for every configuration:** R@5 from
+  0.24 to 0.52.
+- **Comparative questions are rarely fully covered:** the best Cov@5 is 0.21 (5
+  of 24); the top 5 usually holds evidence for only one of the papers compared.
+- **Naming gap:** on the first 45 questions the most persistent miss (q017,
+  missed in 15 of 18 configurations) was an evidence chunk that never names the
+  method ("ST3"); the name is only in the paper title, which is not part of
+  chunk text. Prepending the paper title to each chunk before indexing is the
+  experiment below.
 
 ---
 
@@ -104,11 +120,11 @@ survivable.
 **Reranking.** `cross-encoder/ms-marco-MiniLM-L-6-v2` over the top 20, down to
 the top 5. Optional, and measured with latency so the cost is visible.
 
-**Evaluation.** 50 question/answer pairs, each labelled with every chunk that
-actually contains the answer: 20 single fact, 10 multi hop, 8 comparative, 7
-paraphrased with no keyword overlap, and 5 deliberately unanswerable. The
-unanswerable five exist to measure abstention. The set was drafted by Claude
-and reviewed by the author; see Limitations.
+**Evaluation.** 150 question/answer pairs over all 50 papers, each labelled
+with every chunk that actually contains the answer: 60 single fact, 30 multi
+hop, 24 comparative, 21 paraphrased with little keyword overlap, and 15
+deliberately unanswerable. The unanswerable fifteen exist to measure
+abstention. The set was drafted by Claude; see Limitations.
 
 A retrieved chunk is relevant when it contains a gold quote. R@k is the share
 of answerable questions with a relevant chunk in the top k; MRR@10 and nDCG@10
@@ -200,15 +216,16 @@ data/                  PDFs, chunks, indexes (gitignored)
   heterogeneous document sets. The keyword top-up also pulled in a few
   off-topic papers (underwater segmentation, text-image retrieval, SAM-based
   referring segmentation); they are kept as realistic distractors.
-- The gold set was drafted by Claude (Opus 5) and reviewed and approved as-is
-  by the author, rather than written by the author. Gold chunks were found by
-  exact-text search over the 512-token chunks rather than by the retrievers
-  under test, so no retriever chose its own answers, but the questions were
-  written with the corpus text in view, it is one judgement of what "contains
-  the answer" means, and inter-annotator agreement is unmeasured.
-- The gold set is small: 45 answerable questions, so one question moves R@k by
-  about 2.2 points, and 8 comparative questions make Cov@5 very coarse.
-  Differences of a few points between configurations are within that noise.
+- The gold set was drafted by Claude (Opus 5): the first 50 questions were
+  reviewed and approved by the author, the 100 added later were drafted the
+  same way. Gold chunks were found by exact-text search over the 512-token
+  chunks rather than by the retrievers under test, so no retriever chose its
+  own answers, but the questions were written with the corpus text in view, it
+  is one judgement of what "contains the answer" means, and inter-annotator
+  agreement is unmeasured.
+- 135 answerable questions give intervals of roughly +/-7 points of R@5 on a
+  single configuration. Per-type samples (21 paraphrased, 24 comparative) are
+  still too small for type-level claims.
 - The relevance rule (a chunk counts if it contains a gold quote) favours larger
   chunks: a 1024-token chunk is more likely to contain the sentence than a
   256-token one. The chunk-size comparison therefore overstates the benefit of

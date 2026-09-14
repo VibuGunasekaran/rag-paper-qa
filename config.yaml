@@ -27,6 +27,7 @@ embedding:
 
 index:
   dir: data/index          # per chunk size: data/index/512/...
+  title_prefix: false      # true: retrievers see "<paper title>\n\n<chunk>"; built to data/index/512-title/
 
 retrieval:
   method: hybrid           # dense | bm25 | hybrid

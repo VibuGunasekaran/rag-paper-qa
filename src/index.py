@@ -15,6 +15,7 @@ Usage:
     python -m src.index                    # build at the config chunk size
     python -m src.index --chunk-size 256
     python -m src.index --all              # 256, 512 and 1024
+    python -m src.index --all --title-prefix   # same, with paper titles prepended
 """
 from __future__ import annotations
 
@@ -55,6 +56,24 @@ def bm25_tokenize(text: str) -> list[str]:
     return out
 
 
+def index_dir(cfg, chunk_size: int) -> Path:
+    """data/index/512, or data/index/512-title when chunk titles are indexed too."""
+    suffix = "-title" if cfg["index"].get("title_prefix") else ""
+    return resolve(cfg["index"]["dir"]) / f"{chunk_size}{suffix}"
+
+
+def indexed_text(chunk: dict, title_prefix: bool) -> str:
+    """The text a retriever sees for a chunk.
+
+    With title_prefix the paper title leads the chunk. Body chunks often never
+    name the method they describe ("ST3", "LLaVA"), so a question that names it
+    cannot match them. The stored chunk text, and so gold-quote matching, is
+    the same either way.
+    """
+    title = chunk.get("title", "").strip()
+    return f"{title}\n\n{chunk['text']}" if title_prefix and title else chunk["text"]
+
+
 def load_chunks(path: Path) -> list[dict]:
     if not path.exists():
         raise FileNotFoundError(
@@ -71,7 +90,9 @@ def build_index(cfg, chunk_size: int) -> Path:
     chunks = load_chunks(chunk_path)
     print(f"[{chunk_size}] {len(chunks)} chunks from {chunk_path.name}")
 
-    out_dir = resolve(cfg["index"]["dir"]) / str(chunk_size)
+    title_prefix = bool(cfg["index"].get("title_prefix"))
+    texts = [indexed_text(c, title_prefix) for c in chunks]
+    out_dir = index_dir(cfg, chunk_size)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- dense ---
@@ -87,7 +108,7 @@ def build_index(cfg, chunk_size: int) -> Path:
     t0 = time.perf_counter()
     # No query prefix here: bge wants it on the query side only.
     vectors = model.encode(
-        [c["text"] for c in chunks],
+        texts,
         batch_size=cfg["embedding"]["batch_size"],
         normalize_embeddings=True,     # so inner product == cosine similarity
         show_progress_bar=True,
@@ -105,7 +126,7 @@ def build_index(cfg, chunk_size: int) -> Path:
     from rank_bm25 import BM25Okapi
 
     print(f"[{chunk_size}] building BM25")
-    bm25 = BM25Okapi([bm25_tokenize(c["text"]) for c in chunks])
+    bm25 = BM25Okapi([bm25_tokenize(t) for t in texts])
     with open(out_dir / "bm25.pkl", "wb") as fh:
         pickle.dump(bm25, fh)
 
@@ -116,6 +137,7 @@ def build_index(cfg, chunk_size: int) -> Path:
 
     meta = {
         "chunk_size": chunk_size,
+        "title_prefix": title_prefix,
         "n_chunks": len(chunks),
         "n_papers": len({c["paper_id"] for c in chunks}),
         "embedding_model": model_name,
@@ -135,9 +157,13 @@ def main() -> int:
     ap.add_argument("--config", default=None)
     ap.add_argument("--chunk-size", type=int, default=None)
     ap.add_argument("--all", action="store_true", help="Build 256, 512 and 1024.")
+    ap.add_argument("--title-prefix", action="store_true",
+                    help="Index each chunk with its paper title prepended (data/index/<size>-title).")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    if args.title_prefix:
+        cfg["index"]["title_prefix"] = True
     sizes = [256, 512, 1024] if args.all else [args.chunk_size or cfg["chunking"]["chunk_size"]]
     for size in sizes:
         build_index(cfg, size)

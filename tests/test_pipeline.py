@@ -26,7 +26,7 @@ if "tqdm" not in sys.modules:
         sys.modules["tqdm"] = mod
 
 from src.ingest import _is_heading, chunk_section, split_sections  # noqa: E402
-from src.index import bm25_tokenize  # noqa: E402
+from src.index import bm25_tokenize, indexed_text  # noqa: E402
 from src.retrieve import reciprocal_rank_fusion  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "eval"))
@@ -165,6 +165,17 @@ def test_bm25_tokenize():
     return ok
 
 
+def test_indexed_text():
+    chunk = {"title": "ST3: Accelerating MLLMs", "text": "we avoid pruning tokens in the first three layers"}
+    ok = True
+    ok &= check("title prefix leads the indexed text",
+                indexed_text(chunk, True)
+                == "ST3: Accelerating MLLMs\n\nwe avoid pruning tokens in the first three layers")
+    ok &= check("without the prefix the chunk text is unchanged", indexed_text(chunk, False) == chunk["text"])
+    ok &= check("a missing title adds nothing", indexed_text({"text": "body"}, True) == "body")
+    return ok
+
+
 def test_metrics():
     flags = [False, True, False, True]   # relevant at ranks 2 and 4
     ok = True
@@ -200,6 +211,7 @@ def main() -> int:
         ("chunking", test_chunking),
         ("reciprocal rank fusion", test_rrf),
         ("bm25 tokenisation", test_bm25_tokenize),
+        ("indexed text", test_indexed_text),
         ("retrieval metrics", test_metrics),
     ]:
         print(f"\n{name}")

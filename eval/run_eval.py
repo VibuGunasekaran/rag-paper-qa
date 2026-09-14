@@ -60,6 +60,9 @@ COMPARISONS = [
     ((512, "hybrid", True), (512, "bm25", False)),
     ((256, "hybrid", True), (512, "hybrid", True)),
     ((1024, "hybrid", True), (512, "hybrid", True)),
+    # The reranker reads at most 512 tokens, so at 1024 it cannot see the back half of a chunk.
+    ((1024, "bm25", True), (1024, "bm25", False)),
+    ((1024, "hybrid", True), (1024, "hybrid", False)),
 ]
 
 
@@ -303,6 +306,43 @@ def render_markdown(cfg, configs: list[dict], comparisons: list[dict], n_rows: i
     return "\n".join(lines)
 
 
+def _by_config_and_id(queries: list[dict]) -> dict[tuple, dict]:
+    return {(key_of(q), q["id"]): q for q in queries}
+
+
+def compare_files(base_path: Path, variant_path: Path, out: Path) -> int:
+    """Paired bootstrap of VARIANT - BASE for every configuration both runs contain."""
+    base = _by_config_and_id(json.loads(base_path.read_text(encoding="utf-8"))["queries"])
+    variant = _by_config_and_id(json.loads(variant_path.read_text(encoding="utf-8"))["queries"])
+    keys = sorted({k for k, _ in base} & {k for k, _ in variant})
+    lines = [
+        f"# {variant_path.name} vs {base_path.name}",
+        "",
+        "Paired difference variant - base on the same questions, with 95% bootstrap intervals. "
+        "`*` marks intervals that exclude zero.",
+        "",
+        "| Chunk | Retriever | Rerank | n | R@5 base | R@5 variant | R@5 diff [95% CI] "
+        "| MRR@10 base | MRR@10 variant | MRR@10 diff [95% CI] |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for key in keys:
+        ids = sorted(i for k, i in base if k == key and (key, i) in variant)
+        cells = []
+        for metric in ("R@5", "MRR@10"):
+            b = [base[(key, i)][metric] for i in ids]
+            v = [variant[(key, i)][metric] for i in ids]
+            lo, hi = bootstrap_ci([x - y for x, y in zip(v, b)])
+            mark = " *" if lo > 0 or hi < 0 else ""
+            cells += [f"{statistics.fmean(b):.3f}", f"{statistics.fmean(v):.3f}",
+                      f"{statistics.fmean(v) - statistics.fmean(b):+.3f} [{lo:+.3f}, {hi:+.3f}]{mark}"]
+        lines.append("| " + " | ".join(label(key)) + f" | {len(ids)} | " + " | ".join(cells) + " |")
+    lines.append("")
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"Wrote {out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Score retrieval configurations against the gold set.")
     ap.add_argument("--config", default=None)
@@ -311,10 +351,20 @@ def main() -> int:
     ap.add_argument("--rerank", choices=["both", "on", "off"], default="both")
     ap.add_argument("--report-only", action="store_true",
                     help="Skip retrieval; recompute intervals and re-render from results.json.")
+    ap.add_argument("--title-prefix", action="store_true",
+                    help="Use the title-prefixed indexes; writes results_title_prefix.md/.json.")
+    ap.add_argument("--compare", nargs=2, metavar=("BASE_JSON", "VARIANT_JSON"),
+                    help="Paired comparison of two results.json files, configuration by configuration.")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     md_path = resolve(cfg["eval"]["results_path"])
+    if args.compare:
+        base_path, variant_path = (resolve(p) for p in args.compare)
+        return compare_files(base_path, variant_path, md_path.with_name(f"compare_{variant_path.stem}.md"))
+    if args.title_prefix:
+        cfg["index"]["title_prefix"] = True
+        md_path = md_path.with_name(f"{md_path.stem}_title_prefix.md")
     json_path = md_path.with_suffix(".json")
 
     if args.report_only:
