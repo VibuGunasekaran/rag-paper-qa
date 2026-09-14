@@ -217,6 +217,28 @@ ALLCAPS_HEADING = re.compile(r"^\s*([A-Z][A-Z0-9 \-&]{3,50})\s*$")
 DEHYPHEN = re.compile(r"(\w)-\n(\w)")
 
 
+CAPTION_START = re.compile(r"^(table|tab\.|figure|fig\.?)\s", re.IGNORECASE)
+SENTENCE_STARTS = {"We", "Our", "This", "These", "It", "Here", "However"}
+
+
+def _heading_base(heading: str) -> str:
+    """'4.2 Related Work' -> 'related work'."""
+    return re.sub(r"^\d[\d.]*\s+", "", heading).lower().strip()
+
+
+def _looks_like_body(title: str) -> bool:
+    """Table cells, captions and sentence fragments that pass the heading shape tests."""
+    words = title.split()
+    return (
+        any(NUMERIC_TOKEN.match(w) for w in words)
+        or bool(NUMERIC_CELL.search(title))
+        or title.endswith(("-", ","))
+        or words[-1].lower() in TRAILING_FUNCTION_WORDS
+        or bool(CAPTION_START.match(title))
+        or (words[0] in SENTENCE_STARTS and len(words) >= 4)
+    )
+
+
 def _is_heading(line: str) -> str | None:
     """Return a normalised heading title, or None if this is body text."""
     stripped = line.strip()
@@ -231,30 +253,23 @@ def _is_heading(line: str) -> str | None:
         words = title.split()
         top_level = int(m.group(1).split(".")[0])
         # Reject "3 dogs were counted" style false positives: headings are short
-        # and do not read as sentences. Figure axes and table rows also match
-        # the pattern ("40 To address the above limitations, we propose PagedAt-",
-        # "65 CLIP 98.4 76.2", "2 WikiSQL (±0.5%)"), so reject implausible
-        # section numbers, numeric cells, and titles that break off mid-sentence.
-        if (
-            len(words) <= 8
-            and top_level <= MAX_SECTION_NUMBER
-            and not any(NUMERIC_TOKEN.match(w) for w in words)
-            and not NUMERIC_CELL.search(title)
-            and not title.endswith(("-", ","))
-            and words[-1].lower() not in TRAILING_FUNCTION_WORDS
-        ):
+        # and do not read as sentences. Figure axes, table rows and captions also
+        # match the pattern ("40 To address the above limitations, we propose
+        # PagedAt-", "65 CLIP 98.4 76.2", "8 TABLE VIII"), so reject implausible
+        # section numbers and anything that looks like body text.
+        if len(words) <= 8 and top_level <= MAX_SECTION_NUMBER and not _looks_like_body(title):
             return f"{m.group(1)} {title}"
     m = ALLCAPS_HEADING.match(stripped)
-    if m and len(m.group(1).split()) <= 8:
+    if m and len(m.group(1).split()) <= 8 and not _looks_like_body(m.group(1)):
         return m.group(1).title()
     return None
 
 
 def pdf_to_text(pdf_path: Path) -> str:
-    import fitz  # PyMuPDF
+    import pymupdf
 
     parts: list[str] = []
-    with fitz.open(pdf_path) as doc:
+    with pymupdf.open(pdf_path) as doc:
         for page in doc:
             # Native order, not sort=True: sorting orders lines by page position,
             # which reads straight across both columns of a two-column paper.
@@ -286,8 +301,7 @@ def split_sections(text: str, stop_sections: set[str]) -> list[tuple[str, str]]:
                 i += 1
         i += 1
         if heading:
-            base = re.sub(r"^\d[\d.]*\s+", "", heading).lower().strip()
-            if base in stop_sections:
+            if _heading_base(heading) in stop_sections:
                 break
             sections.append((heading, []))
         else:
@@ -397,8 +411,11 @@ def build_chunks(
             print(f"  ! {paper.arxiv_id}: parse failed ({exc})", file=sys.stderr)
             continue
         sections = split_sections(text, stop_sections)
-        # The API abstract is cleaner than the PDF's, so lead with it.
+        # The API abstract is cleaner than the PDF's, so lead with it and drop
+        # the PDF copy: two near-identical chunks per paper compete in retrieval
+        # and make "which chunk holds the answer" ambiguous in the gold set.
         if paper.abstract:
+            sections = [(t, b) for t, b in sections if _heading_base(t) != "abstract"]
             sections.insert(0, ("Abstract", paper.abstract))
         for s_idx, (title, body) in enumerate(sections):
             for c_idx, chunk_text in enumerate(

@@ -159,6 +159,15 @@ class Retriever:
         top = np.argsort(scores)[::-1][: min(k, len(self.ids))]
         return [self.ids[i] for i in top if scores[i] > 0]
 
+    def warmup(self, method: str = "hybrid", rerank: bool = True) -> None:
+        """Load models with one throwaway query so timed calls start warm.
+
+        The first dense call loads the encoder and the first reranked call loads
+        the cross-encoder, 5-7 s each on an M1. Without this, whichever
+        configuration an eval runs first carries that cost in its p95 latency.
+        """
+        self.retrieve("warm up", method=method, rerank=rerank)
+
     # -- one interface -----------------------------------------------------
     def retrieve(
         self,

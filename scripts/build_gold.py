@@ -12,7 +12,8 @@ goes. It does NOT write your questions. That part is the project.
     python scripts/build_gold.py browse -q "visual token pruning"
 
 Row schema (eval/gold_set.jsonl):
-    {"id", "question", "answer", "gold_chunks": [...], "type", "notes"}
+    {"id", "question", "answer", "gold_chunks": [chunk_id, ...],
+     "gold_quotes": [{"chunk_id", "quote"}, ...], "type", "notes"}
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, resolve          # noqa: E402
+from src.index import bm25_tokenize                  # noqa: E402
 from src.retrieve import Retriever                   # noqa: E402
 
 TYPES = ["single_fact", "multi_hop", "comparative", "paraphrased", "unanswerable"]
@@ -35,6 +37,10 @@ TYPE_HELP = {
     "paraphrased": "no keyword overlap with the source wording",
     "unanswerable": "plausible, but the corpus cannot answer it",
 }
+# A paraphrased question sharing this share of its terms with the evidence is
+# not paraphrased: BM25 would find it, and the dense-vs-lexical comparison
+# these rows exist for would measure nothing.
+PARAPHRASE_MAX_OVERLAP = 0.5
 
 
 def load_gold(path: Path) -> list[dict]:
@@ -47,6 +53,12 @@ def append_row(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def next_id(gold: list[dict]) -> str:
+    """One past the highest existing id, so hand-deleted rows never cause a clash."""
+    nums = [int(m.group(1)) for g in gold if (m := re.match(r"q(\d+)$", g.get("id", "")))]
+    return f"q{max(nums, default=0) + 1:03d}"
 
 
 def print_progress(gold: list[dict], target: dict) -> None:
@@ -68,6 +80,14 @@ def normalise(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def nth(items: list, raw: str):
+    """1-based lookup that rejects 0 and negatives instead of wrapping around."""
+    n = int(raw)
+    if not 1 <= n <= len(items):
+        raise IndexError(n)
+    return items[n - 1]
+
+
 def pick_quote(chunk_text: str) -> str:
     """Pick the answer-bearing sentence from a chunk, by number, not by typing.
 
@@ -79,21 +99,25 @@ def pick_quote(chunk_text: str) -> str:
     contains the quote. Retrofitting this after 50 questions is a bad evening.
     """
     sentences = [s.strip() for s in SENT_SPLIT.split(chunk_text) if len(s.strip()) > 25]
-    if not sentences:
-        return chunk_text.strip()[:300]
-    print("\n      which sentence actually contains the answer?")
-    for i, s in enumerate(sentences[:12], 1):
-        print(f"        ({i}) {s[:150]}{'...' if len(s) > 150 else ''}")
-    raw = input("      number (Enter = whole chunk, 'p' = paste your own): ").strip()
-    if raw.lower() == "p":
-        return input("      paste: ").strip()
-    if not raw:
-        return ""
-    try:
-        return sentences[int(raw) - 1]
-    except (ValueError, IndexError):
-        print("      ! not a valid number, recording the whole chunk")
-        return ""
+    print("\n      which sentence actually contains the answer? (shorter spans survive "
+          "smaller chunk sizes)")
+    for i, s in enumerate(sentences, 1):
+        print(f"        ({i}) {s[:160]}{'...' if len(s) > 160 else ''}")
+    while True:
+        raw = input("      number | 'p' paste a span from this chunk | 'n' no quote: ").strip()
+        if raw.lower() == "n":
+            print("      ! no quote: this row can only be scored at this chunk size")
+            return ""
+        if raw.lower() == "p":
+            pasted = input("      paste: ").strip()
+            if pasted and normalise(pasted) in normalise(chunk_text):
+                return pasted
+            print("      ! that text is not in this chunk verbatim, try again")
+            continue
+        try:
+            return nth(sentences, raw)
+        except (ValueError, IndexError):
+            print("      ! not one of the numbers above")
 
 
 def show_candidates(hits, offset: int = 0) -> None:
@@ -140,45 +164,63 @@ def cmd_add(args) -> int:
             answer = input("  What should it say / why is this unanswerable? ").strip()
         else:
             search_q = question
+            out = None
             while True:
-                out = retriever.retrieve(search_q, method="hybrid", rerank=True, top_k=10,
-                                         candidate_k=30)
-                print()
-                show_candidates(out.hits)
-                print("  select: numbers (e.g. 1,4) | 'id <chunk_id>' | 's <new query>' | 'skip'")
+                if out is None:
+                    out = retriever.retrieve(search_q, method="hybrid", rerank=True, top_k=10,
+                                             candidate_k=30)
+                    print()
+                    show_candidates(out.hits)
+                    print("  pick: numbers (1,4) | 'id <chunk_id> ...' | 'v <n>' full text | "
+                          "'s <query>' search again, keeps picks | 'clear' | 'skip'")
+                    print("  Empty line when done.")
+                if gold_chunks:
+                    print(f"  picked: {', '.join(gold_chunks)}")
                 sel = input("  > ").strip()
-                if sel.lower() == "skip":
+                low = sel.lower()
+                if not sel:
+                    if gold_chunks:
+                        break
+                    continue
+                if low == "skip":
                     gold_chunks = []
                     break
-                if sel.lower().startswith("s "):
+                if low == "clear":
+                    gold_chunks = []
+                    continue
+                if low.startswith("s "):
                     search_q = sel[2:].strip()
+                    out = None
                     continue
-                if sel.lower().startswith("id "):
-                    cid = sel[3:].strip()
-                    if cid in retriever.by_id:
-                        gold_chunks = [cid]
-                        break
-                    print(f"  ! {cid} is not a chunk id in this index")
-                    continue
-                picked = []
-                ok = True
-                for part in sel.replace(" ", "").split(","):
-                    if not part:
-                        continue
+                if low.startswith("v "):
                     try:
-                        picked.append(out.hits[int(part) - 1].chunk_id)
+                        hit = nth(out.hits, sel[2:])
+                        print(f"\n  --- {hit.chunk_id} | {hit.section}\n{hit.text}\n  ---\n")
                     except (ValueError, IndexError):
-                        print(f"  ! '{part}' is not one of the numbers above")
-                        ok = False
-                        break
-                if ok and picked:
-                    gold_chunks = picked
-                    break
+                        print("  ! 'v' takes one of the numbers above")
+                    continue
+                if low.startswith("id "):
+                    new = sel[3:].replace(",", " ").split()
+                    unknown = [c for c in new if c not in retriever.by_id]
+                    if unknown:
+                        print(f"  ! not chunk ids in this index: {', '.join(unknown)}")
+                        continue
+                else:
+                    try:
+                        new = [nth(out.hits, p).chunk_id
+                               for p in sel.replace(" ", "").split(",") if p]
+                    except (ValueError, IndexError):
+                        print("  ! use numbers from the list above, or one of the commands")
+                        continue
+                gold_chunks += [c for c in new if c not in gold_chunks]
             if not gold_chunks:
                 print("  ! no chunks selected, skipping this question\n")
                 continue
             if qtype == "multi_hop" and len(gold_chunks) < 2:
                 print("  ! multi_hop needs 2+ gold chunks. Recorded anyway -- fix it")
+                print("    later or validate will flag it.")
+            if qtype == "comparative" and len({c.split("::")[0] for c in gold_chunks}) < 2:
+                print("  ! comparative needs chunks from 2+ papers. Recorded anyway -- fix it")
                 print("    later or validate will flag it.")
             for cid in gold_chunks:
                 q = pick_quote(retriever.by_id[cid]["text"])
@@ -188,7 +230,7 @@ def cmd_add(args) -> int:
 
         notes = input("  Notes (optional, Enter to skip): ").strip()
         row = {
-            "id": f"q{len(gold) + 1:03d}",
+            "id": next_id(gold),
             "question": question,
             "answer": answer,
             "gold_chunks": gold_chunks,
@@ -216,6 +258,20 @@ def cmd_validate(args) -> int:
 
     retriever = Retriever(chunk_size=args.chunk_size, config=cfg)
     known = set(retriever.by_id)
+    # Day 4 scores every chunk size against the same quotes, so a quote has to
+    # fit inside one chunk at each size, not only the size it was picked at.
+    index_root = resolve(cfg["index"]["dir"])
+    other_sizes: dict[int, dict[str, list[str]]] = {}
+    for size in (256, 512, 1024):
+        path = index_root / str(size) / "chunks.jsonl"
+        if size == retriever.chunk_size or not path.exists():
+            continue
+        by_paper: dict[str, list[str]] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                c = json.loads(line)
+                by_paper.setdefault(c["paper_id"], []).append(normalise(c["text"]))
+        other_sizes[size] = by_paper
     problems: list[str] = []
     seen_ids: set[str] = set()
     seen_questions: set[str] = set()
@@ -249,6 +305,19 @@ def cmd_validate(args) -> int:
                     )
             if row.get("type") == "multi_hop" and len(chunks) < 2:
                 problems.append(f"{rid}: multi_hop with only {len(chunks)} gold chunk")
+            if row.get("type") == "comparative" and len({c.split("::")[0] for c in chunks}) < 2:
+                problems.append(f"{rid}: comparative but every gold chunk is from one paper")
+            if row.get("type") == "paraphrased":
+                q_terms = set(bm25_tokenize(row.get("question", "")))
+                quote_terms = set(bm25_tokenize(
+                    " ".join(gq.get("quote", "") for gq in row.get("gold_quotes", []))
+                ))
+                shared = q_terms & quote_terms
+                if q_terms and len(shared) / len(q_terms) >= PARAPHRASE_MAX_OVERLAP:
+                    problems.append(
+                        f"{rid}: paraphrased but shares {len(shared)}/{len(q_terms)} terms "
+                        f"with its quotes ({', '.join(sorted(shared))})"
+                    )
             quotes = row.get("gold_quotes", [])
             if not quotes:
                 problems.append(
@@ -259,9 +328,18 @@ def cmd_validate(args) -> int:
                 cid, quote = gq.get("chunk_id"), gq.get("quote", "")
                 if cid in known and normalise(quote) not in normalise(retriever.by_id[cid]["text"]):
                     problems.append(f"{rid}: quote not found verbatim in {cid}")
+                paper = (cid or "").split("::")[0]
+                for size, by_paper in other_sizes.items():
+                    if not any(normalise(quote) in text for text in by_paper.get(paper, [])):
+                        problems.append(
+                            f"{rid}: quote from {cid} does not fit inside any {size}-token "
+                            "chunk -- pick a shorter span"
+                        )
 
     counts = {t: sum(1 for g in gold if g.get("type") == t) for t in TYPES}
-    print(f"Validating {len(gold)} rows against the {retriever.chunk_size}-token index\n")
+    checked = ", ".join(str(s) for s in other_sizes) or "none built"
+    print(f"Validating {len(gold)} rows against the {retriever.chunk_size}-token index "
+          f"(quotes also checked at: {checked})\n")
     for t in TYPES:
         want = target.get(t, 0)
         status = "ok" if counts[t] == want else ("over" if counts[t] > want else "short")
