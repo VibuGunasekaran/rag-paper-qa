@@ -190,6 +190,22 @@ def test_generation_helpers():
     ok &= check("refusals are recorded, not counted as abstentions", refused.refused and not refused.abstained)
     truncated = _to_answer(response("max_tokens", None), "q", hits, 1.0, "claude-opus-5")
     ok &= check("missing structured output is a parse failure", truncated.parse_failed and not truncated.refused)
+
+    from run_generation import summarise
+
+    def record(qtype, abstained, correctness):
+        gen = {"refused": False, "parse_failed": False, "abstained": abstained,
+               "model": "claude-opus-5", "requested_model": "claude-opus-5", "usage": {}}
+        judge = {"refused": False, "parse_failed": False, "faithfulness": "full",
+                 "correctness": correctness, "model": "claude-opus-5", "usage": {}}
+        return {"type": qtype, "generation": gen, "judge": judge, "evidence_retrieved": True,
+                "citations_valid": True, "cites_gold": True}
+
+    s = summarise([record("unanswerable", True, "abstained"), record("unanswerable", False, "incorrect"),
+                   record("single_fact", False, "correct"), record("single_fact", True, "abstained")])
+    ok &= check("abstaining on an unanswerable question counts as correct",
+                s["correct_unanswerable"]["rate"] == 0.5 and s["by_type"]["unanswerable"]["correct"]["rate"] == 0.5)
+    ok &= check("abstaining on an answerable question does not", s["by_type"]["single_fact"]["correct"]["rate"] == 0.5)
     return ok
 
 

@@ -4,11 +4,10 @@ Retrieval augmented question answering over a corpus of arXiv papers on vision
 language models and efficient inference, with a measured retrieval and
 faithfulness evaluation.
 
-> **Status: Days 1-4 complete (ingestion, indexing, retrieval, 150-question
-> gold set, 18-configuration retrieval evaluation). Next: Day 5, generation and
-> faithfulness.**
-> Numbers below are placeholders until the gold set exists. Nothing in this
-> README is a claim until it has a number next to it.
+> **Status: Days 1-5 complete (ingestion, indexing, retrieval, 150-question
+> gold set, 18-configuration retrieval evaluation, cited generation with
+> abstention and an LLM-judged faithfulness evaluation). Next: Day 6, serving.**
+> Every claim below has a number and an interval next to it.
 
 ---
 
@@ -109,6 +108,57 @@ text and gold matching were unchanged. Built with
   title helps lexical matching on paper names but pulls every chunk of a paper
   toward the same point in embedding space.
 
+### Generation: cited answers with abstention
+
+All 150 questions, answered by `claude-opus-5` from the top 5 chunks of 512-token
+hybrid + rerank retrieval, and judged by `claude-opus-5` against the sources it
+was shown (faithfulness) and the gold answer (correctness). Full tables:
+`eval/results_generation.md`. One run cost about $7.40, with no refusals and no
+malformed responses.
+
+| Metric | Rate [95% CI] | n |
+|---|---|---|
+| Gold evidence in the top 5 (answerable) | 0.79 [0.72, 0.85] | 135 |
+| Correct (answerable) | 0.82 [0.76, 0.88] | 135 |
+| Correct, when gold evidence was retrieved | 0.95 [0.91, 0.99] | 106 |
+| Every claim supported by the sources (answered) | 1.00 | 124 |
+| Abstained on unanswerable questions | 1.00 | 15 |
+| Abstained although gold evidence was retrieved | 0.01 [0.00, 0.03] | 106 |
+| Abstained when gold evidence was not retrieved | 0.34 [0.17, 0.52] | 29 |
+
+| Type | Correct [95% CI] |
+|---|---|
+| Single fact (60) | 0.93 [0.87, 0.98] |
+| Multi hop (30) | 0.90 [0.80, 1.00] |
+| Comparative (24) | 0.58 [0.38, 0.79] |
+| Paraphrased (21) | 0.67 [0.48, 0.86] |
+| Unanswerable (15, abstention counts as correct) | 1.00 |
+
+- **Retrieval is the bottleneck, not generation.** Of the 24 answerable
+  questions not judged correct, 19 had no gold evidence in the top 5. With the
+  evidence in hand, 101 of 106 answers are correct and the other 5 are partial:
+  a comparative or multi-hop question where the top 5 held evidence for only one
+  side, and the answer said so.
+- **The weak question types match the Day 4 weak spots.** Comparative (Cov@5 was
+  0.21) and paraphrased questions are the two types whose correctness intervals
+  sit below single-fact's.
+- **No fabricated claims were found.** The judge marked all 124 answers fully
+  supported. As a check that does not rely on the judge, every number in every
+  answer (335) appears in the sources that answer was shown; the only mismatch
+  was a checker artefact.
+- **Abstention is well calibrated at both ends.** 15 of 15 unanswerable
+  questions abstained, and only 1 of 106 answerable questions with evidence did
+  (q126, a comparison where only one method was retrieved; it answered that half).
+- **On a retrieval miss the model abstains, answers correctly from other
+  chunks, or answers a neighbouring question.** Of the 29 misses: 10 abstained,
+  10 were correct anyway, 5 partial, 4 incorrect. The 10 correct ones show the
+  gold-quote rule undercounts evidence (q040's LoRA merge is also stated in a
+  chunk the gold set did not list). The 4 incorrect answers are not invented:
+  each states that the sources don't cover the question, then reports a related
+  figure (q083 gives the memory saved by prompt sharing, 6.1-9.8%, when asked
+  for the prompt's 12% share). A stricter prompt could turn these into
+  abstentions.
+
 ---
 
 ## Method
@@ -151,6 +201,17 @@ use binary relevance; Cov@5 is the share of comparative questions whose top 5
 includes evidence from every paper being compared. Latency is end-to-end
 `retrieve()` time after a warm-up call.
 
+**Generation.** `src/generate.py` gives Claude the top 5 chunks as numbered
+sources and asks for a short answer with inline `[S#]` citations, or an
+explicit abstention when the sources do not contain the answer. Output is
+structured (`abstained`, `answer`, `cited_sources`); citations are checked
+against the source list and the inline markers. Server-side refusal fallbacks
+are on, and each answer records which model served it. `eval/judge.py` scores
+faithfulness against the sources only and correctness against the gold answer,
+as separate verdicts. Unanswerable questions are scored on the abstention flag
+itself. Every API response is cached by request hash
+(`eval/generation_cache.jsonl`), so re-running the evaluation is free.
+
 ---
 
 ## Running it
@@ -184,8 +245,8 @@ python eval/run_eval.py               # 18 configs -> eval/results.md, results.j
 # Day 5: generation and faithfulness (Claude API) ---------------------
 cp .env.example .env                  # then add ANTHROPIC_API_KEY
 python eval/run_generation.py --dry-run   # retrieval + cost estimate, no API calls
-python eval/run_generation.py --limit 6   # smoke test across question types
-python eval/run_generation.py             # all 150 -> eval/results_generation.md
+python eval/run_generation.py --limit 6   # smoke test across question types (~$0.30)
+python eval/run_generation.py             # all 150 -> eval/results_generation.md (~$7.40; cached re-runs free)
 
 # Tests (no models, no network) ---------------------------------------
 python tests/test_pipeline.py
@@ -234,8 +295,6 @@ data/                  PDFs, chunks, indexes (gitignored)
 
 ## Limitations
 
-*(Fill this in honestly as you go. Seeds already known:)*
-
 - PDF parsing is heuristic. Two-column academic PDFs, tables and equations all
   degrade to imperfect text, and heading detection is regex-based. Some chunks
   will contain figure captions and table fragments.
@@ -258,6 +317,14 @@ data/                  PDFs, chunks, indexes (gitignored)
   256-token one. The chunk-size comparison therefore overstates the benefit of
   large chunks, and it ignores that a generator must read four times as much
   text per retrieved 1024-token chunk.
+- The judge is the same model as the generator, and its verdicts have not been
+  checked against human grading, so self-preference could inflate faithfulness
+  and correctness. The independent number check covers figures only, not
+  wording. The judge also labels some abstentions "partial" rather than
+  "abstained", which puts 3 abstentions into the "correct or partial" rate.
+- Generation was run once; answers at a different time or with a different
+  model version would vary. The 29 retrieval misses are too few to compare
+  abstention against answering a neighbouring question with any precision.
 - Latency is one run per query on one laptop (M1, MPS), after warm-up. p95 over
   45 queries is the third-slowest query, not a stable tail estimate.
 - Heading detection still admits a few figure and table labels as section

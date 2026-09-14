@@ -164,6 +164,16 @@ def summarise(records: list[dict]) -> dict:
     usable = [r for r in records if not (gen(r)["refused"] or gen(r)["parse_failed"])]
     answered = [r for r in usable if not gen(r)["abstained"]]
 
+    def scored(r):
+        # Unanswerable rows are scored on the abstention itself: the judge labels a
+        # correct abstention "abstained", not "correct", so its verdict can't be used.
+        return r in usable if r["type"] == "unanswerable" else judged(r)
+
+    def correct(r):
+        if r["type"] == "unanswerable":
+            return gen(r)["abstained"]
+        return r["judge"]["correctness"] == "correct"
+
     summary = {
         "n_questions": len(records),
         "refusals": sum(gen(r)["refused"] for r in records),
@@ -183,12 +193,12 @@ def summarise(records: list[dict]) -> dict:
                                    for r in answerable if judged(r)),
         "correct_with_evidence": rate(r["judge"]["correctness"] == "correct"
                                       for r in answerable if judged(r) and r["evidence_retrieved"]),
-        "correct_unanswerable": rate(r["judge"]["correctness"] == "correct" for r in unanswerable if judged(r)),
+        "correct_unanswerable": rate(correct(r) for r in unanswerable if scored(r)),
     }
     summary["by_type"] = {
         t: {
             "n": sum(r["type"] == t for r in records),
-            "correct": rate(r["judge"]["correctness"] == "correct" for r in records if r["type"] == t and judged(r)),
+            "correct": rate(correct(r) for r in records if r["type"] == t and scored(r)),
             "faithful_full": rate(r["judge"]["faithfulness"] == "full" for r in answered
                                   if r["type"] == t and judged(r)),
             "abstained": rate(gen(r)["abstained"] for r in usable if r["type"] == t),
