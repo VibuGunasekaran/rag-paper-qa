@@ -209,6 +209,53 @@ def test_generation_helpers():
     return ok
 
 
+def test_serving():
+    from types import SimpleNamespace as NS
+
+    from fastapi.testclient import TestClient
+
+    from src.generate import Answer
+    from src.serve import Pipeline, create_app
+
+    hits = [NS(chunk_id=f"2309.06180::s03::c0{i}", paper_id="2309.06180", title="vLLM", section="Method",
+               text=f"text {i}") for i in (1, 2)]
+
+    class FakeRetriever:
+        chunks = [{}] * 7
+        def warmup(self, **kw): pass
+        def retrieve(self, question, **kw): return NS(hits=hits, timings_ms={"total_ms": 12.5})
+
+    class FakeGenerator:
+        model = "claude-opus-5"
+        parse_failed = False
+        def answer(self, question, hits):
+            return Answer(question=question, abstained=False, answer="Block size is 16 [S2].", cited_sources=[2],
+                          cited_chunk_ids=[hits[1].chunk_id], source_chunk_ids=[h.chunk_id for h in hits],
+                          requested_model=self.model, model=self.model, stop_reason="end_turn", refused=False,
+                          parse_failed=self.parse_failed, latency_ms=900.0)
+
+    gen = FakeGenerator()
+    pipeline = Pipeline(retriever=FakeRetriever(), generator=gen)
+    ok = True
+    with TestClient(create_app(pipeline)) as client:
+        ok &= check("UI page served", "Ask the papers" in client.get("/").text)
+        health = client.get("/health").json()
+        ok &= check("health reports the evaluated configuration",
+                    health["chunks"] == 7 and health["model"] == "claude-opus-5" and "method" in health)
+        body = client.post("/ask", json={"question": "  What is the block size?  "}).json()
+        ok &= check("answer returned with its sources numbered from 1",
+                    body["answer"] == "Block size is 16 [S2]." and [s["number"] for s in body["sources"]] == [1, 2])
+        ok &= check("only cited sources are flagged", [s["cited"] for s in body["sources"]] == [False, True])
+        ok &= check("sources link to arXiv", body["sources"][0]["url"] == "https://arxiv.org/abs/2309.06180")
+        ok &= check("latency split by stage",
+                    body["timings_ms"] == {"retrieval_ms": 12.5, "generation_ms": 900.0})
+        ok &= check("blank question rejected", client.post("/ask", json={"question": "   "}).status_code == 422)
+        gen.parse_failed = True
+        ok &= check("missing structured answer is a 502, not an empty answer",
+                    client.post("/ask", json={"question": "q"}).status_code == 502)
+    return ok
+
+
 def test_indexed_text():
     chunk = {"title": "ST3: Accelerating MLLMs", "text": "we avoid pruning tokens in the first three layers"}
     ok = True
@@ -257,6 +304,7 @@ def main() -> int:
         ("bm25 tokenisation", test_bm25_tokenize),
         ("indexed text", test_indexed_text),
         ("generation helpers", test_generation_helpers),
+        ("serving", test_serving),
         ("retrieval metrics", test_metrics),
     ]:
         print(f"\n{name}")

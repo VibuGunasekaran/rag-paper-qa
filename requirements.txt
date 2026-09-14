@@ -12,7 +12,6 @@ rank-bm25>=0.2.2
 anthropic>=1.5
 python-dotenv>=1.0
 
-# --- Day 6: serving (uncomment when you get there) ---
-# fastapi>=0.111
-# uvicorn>=0.30
-# gradio>=4.40
+# --- Day 6: serving (FastAPI + a one-page UI) ---
+fastapi>=0.111
+uvicorn>=0.30

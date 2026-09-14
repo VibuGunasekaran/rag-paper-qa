@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rag-paper-qa</title>
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --line:#e7e5e4; --card:#ffffff; --accent:#1d4ed8; --on-accent:#ffffff; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1c1917; --fg:#f5f5f4; --muted:#a8a29e; --line:#44403c; --card:#292524; --accent:#93c5fd; --on-accent:#1c1917; --warn:#fbbf24; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 system-ui, -apple-system, sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .muted { color:var(--muted); font-size:13px; }
+  form { display:flex; gap:8px; margin:20px 0; }
+  textarea { flex:1; font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:inherit; resize:vertical; min-height:46px; }
+  button { font:inherit; padding:0 18px; border:0; border-radius:8px; background:var(--accent); color:var(--on-accent); cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .answer { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:4px 16px 12px; margin-bottom:20px; }
+  .answer.flag { border-color:var(--warn); }
+  .flag-label { color:var(--warn); font-size:13px; margin-top:12px; }
+  .cite { color:var(--accent); text-decoration:none; font-size:12px; vertical-align:super; margin-left:1px; }
+  details { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:8px 0; }
+  details.cited { border-left:3px solid var(--accent); }
+  summary { cursor:pointer; }
+  pre { white-space:pre-wrap; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin:10px 0 0; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ask the papers</h1>
+  <div class="muted" id="about">Answers come only from the indexed arXiv papers on vision-language models and efficient inference, with a citation for every claim, or an explicit "not in the sources".</div>
+  <form id="form">
+    <textarea id="question" maxlength="1000" required placeholder="e.g. What is vLLM's default KV cache block size?"></textarea>
+    <button id="ask">Ask</button>
+  </form>
+  <div id="out"></div>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const CITATION = /(\[S\d+(?:,\s*S\d+)*\])/;
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  fetch("health").then((r) => r.json()).then((h) => {
+    $("about").append(` Retrieval: ${h.method}${h.rerank ? " + rerank" : ""}, ${h.chunk_size}-token chunks, top ${h.top_k}. Model: ${h.model}.`);
+  }).catch(() => {});
+
+  $("question").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
+  });
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const question = $("question").value.trim();
+    if (!question) return;
+    $("ask").disabled = true;
+    $("out").replaceChildren(el("p", "muted", "Retrieving passages and answering..."));
+    try {
+      const r = await fetch("ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${r.status}`);
+      render(data);
+    } catch (err) {
+      const box = el("div", "answer flag");
+      box.append(el("p", null, `Error: ${err.message}`));
+      $("out").replaceChildren(box);
+    } finally {
+      $("ask").disabled = false;
+    }
+  });
+
+  function answerParagraph(text) {
+    const p = el("p");
+    for (const part of text.split(CITATION)) {
+      if (!CITATION.test(part)) { p.append(part); continue; }
+      for (const n of part.match(/\d+/g)) {
+        const a = el("a", "cite", `[${n}]`);
+        a.href = `#S${n}`;
+        a.addEventListener("click", () => { const s = $(`S${n}`); if (s) s.open = true; });
+        p.append(a);
+      }
+    }
+    return p;
+  }
+
+  function render(d) {
+    const out = $("out");
+    out.replaceChildren();
+    const box = el("div", "answer" + (d.abstained || d.refused ? " flag" : ""));
+    if (d.refused) {
+      box.append(el("p", null, "The model declined to answer this question."));
+    } else {
+      if (d.abstained) box.append(el("div", "flag-label", "The retrieved passages do not answer this."));
+      box.append(answerParagraph(d.answer));
+    }
+    box.append(el("div", "muted", `${d.model} · retrieval ${Math.round(d.timings_ms.retrieval_ms)} ms · generation ${(d.timings_ms.generation_ms / 1000).toFixed(1)} s`));
+    out.append(box, el("div", "muted", "Retrieved passages (cited ones marked)"));
+    for (const s of d.sources) {
+      const det = el("details", s.cited ? "cited" : "");
+      det.id = `S${s.number}`;
+      const sum = el("summary", null, `[${s.number}] ${s.title}`);
+      sum.append(el("span", "muted", ` · ${s.section}${s.cited ? " · cited" : ""}`));
+      const link = el("a", null, `arXiv ${s.paper_id}`);
+      link.href = s.url; link.target = "_blank"; link.rel = "noopener";
+      const meta = el("div", "muted");
+      meta.append(link);
+      det.append(sum, meta, el("pre", null, s.text));
+      out.append(det);
+    }
+  }
+</script>
+</body>
+</html>

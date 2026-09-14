@@ -4,9 +4,10 @@ Retrieval augmented question answering over a corpus of arXiv papers on vision
 language models and efficient inference, with a measured retrieval and
 faithfulness evaluation.
 
-> **Status: Days 1-5 complete (ingestion, indexing, retrieval, 150-question
+> **Status: Days 1-6 complete (ingestion, indexing, retrieval, 150-question
 > gold set, 18-configuration retrieval evaluation, cited generation with
-> abstention and an LLM-judged faithfulness evaluation). Next: Day 6, serving.**
+> abstention and an LLM-judged faithfulness evaluation, and a local web app
+> serving the evaluated pipeline).**
 > Every claim below has a number and an interval next to it.
 
 ---
@@ -248,6 +249,11 @@ python eval/run_generation.py --dry-run   # retrieval + cost estimate, no API ca
 python eval/run_generation.py --limit 6   # smoke test across question types (~$0.30)
 python eval/run_generation.py             # all 150 -> eval/results_generation.md (~$7.40; cached re-runs free)
 
+# Day 6: ask questions in the browser ----------------------------------
+python -m src.serve                   # http://127.0.0.1:8000 (models load at startup)
+curl -s localhost:8000/ask -H 'Content-Type: application/json' \
+     -d '{"question": "What is vLLM'"'"'s default KV cache block size?"}'
+
 # Tests (no models, no network) ---------------------------------------
 python tests/test_pipeline.py
 ```
@@ -284,6 +290,7 @@ src/ingest.py          fetch, parse, section split, chunk
 src/index.py           FAISS and BM25 builders
 src/retrieve.py        dense, bm25, hybrid RRF, cross-encoder rerank
 src/generate.py        cited answers with abstention (Claude API, refusal fallbacks)
+src/serve.py           FastAPI app: POST /ask, GET /health, one-page UI (src/static/)
 scripts/build_gold.py  gold set authoring and validation
 tests/test_pipeline.py logic tests, no models or network required
 eval/                  gold_set.jsonl, run_eval.py (retrieval), run_generation.py +
