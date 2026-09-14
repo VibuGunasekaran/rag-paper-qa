@@ -30,7 +30,7 @@ from src.index import bm25_tokenize  # noqa: E402
 from src.retrieve import reciprocal_rank_fusion  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "eval"))
-from run_eval import mrr, ndcg, percentile, recall_at, relevant_flags  # noqa: E402
+from run_eval import bootstrap_ci, mrr, ndcg, percentile, recall_at, relevant_flags  # noqa: E402
 
 
 class WordCounter:
@@ -181,6 +181,14 @@ def test_metrics():
                                ["kv cache takes 800 kb"]) == [True, False])
     ok &= check("nearest-rank p95 of 1..100 is 95", percentile(list(range(1, 101)), 95) == 95)
     ok &= check("p50 of one value is that value", percentile([7.0], 50) == 7.0)
+    ok &= check("bootstrap CI of a constant is that constant",
+                bootstrap_ci([0.5] * 20, n_resamples=200) == (0.5, 0.5))
+    ok &= check("bootstrap CI of identical paired runs is zero",
+                bootstrap_ci([1.0 - 1.0] * 20, n_resamples=200) == (0.0, 0.0))
+    lo, hi = bootstrap_ci([0.0] * 10 + [1.0] * 10, n_resamples=500)
+    ok &= check("bootstrap CI brackets the mean", lo < 0.5 < hi and 0.0 <= lo and hi <= 1.0)
+    ok &= check("bootstrap CI is reproducible with a seed",
+                bootstrap_ci([0.0, 1.0, 1.0], n_resamples=300) == bootstrap_ci([0.0, 1.0, 1.0], n_resamples=300))
     return ok
 
 
