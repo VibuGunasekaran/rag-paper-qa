@@ -8,6 +8,7 @@ trusting a number that came out of the eval.
 """
 from __future__ import annotations
 
+import math
 import re
 import sys
 import types
@@ -27,6 +28,9 @@ if "tqdm" not in sys.modules:
 from src.ingest import _is_heading, chunk_section, split_sections  # noqa: E402
 from src.index import bm25_tokenize  # noqa: E402
 from src.retrieve import reciprocal_rank_fusion  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "eval"))
+from run_eval import mrr, ndcg, percentile, recall_at, relevant_flags  # noqa: E402
 
 
 class WordCounter:
@@ -55,6 +59,15 @@ def test_headings():
     ok &= check("table row rejected", _is_heading("65 CLIP 98.4 76.2 58.5") is None)
     ok &= check("uppercase subsection accepted",
                 _is_heading("4.2 APPLYING LORA TO TRANSFORMER") is not None)
+    ok &= check("table captions rejected",
+                _is_heading("TABLE VI") is None and _is_heading("8 TABLE VIII") is None)
+    ok &= check("numbered sentence rejected",
+                _is_heading("7 We obverse that language conversations are often longer") is None)
+    ok &= check("title fragment ending mid-phrase rejected",
+                _is_heading("PARALLEL VISION TOKEN SCHEDULING FOR FAST AND") is None)
+    ok &= check("ordinary headings still accepted",
+                _is_heading("2.3 Speculative Sampling") is not None
+                and _is_heading("5 EXPERIMENTAL VALIDATION") is not None)
     return ok
 
 
@@ -152,6 +165,25 @@ def test_bm25_tokenize():
     return ok
 
 
+def test_metrics():
+    flags = [False, True, False, True]   # relevant at ranks 2 and 4
+    ok = True
+    ok &= check("recall@1 misses", recall_at(flags, 1) == 0.0)
+    ok &= check("recall@2 hits", recall_at(flags, 2) == 1.0)
+    ok &= check("MRR uses the first relevant rank", mrr(flags) == 0.5)
+    ok &= check("MRR is zero past the cutoff", mrr(flags, k=1) == 0.0)
+    expected = (1 / math.log2(3) + 1 / math.log2(5)) / (1 + 1 / math.log2(3))
+    ok &= check("nDCG matches the binary-gain formula", abs(ndcg(flags, 2) - expected) < 1e-9)
+    ok &= check("perfect ranking scores 1", ndcg([True, True, False], 2) == 1.0)
+    ok &= check("nDCG is zero when nothing relevant exists", ndcg([False, False], 0) == 0.0)
+    ok &= check("quote match ignores case and whitespace",
+                relevant_flags(["The  KV\ncache takes 800 KB", "unrelated"],
+                               ["kv cache takes 800 kb"]) == [True, False])
+    ok &= check("nearest-rank p95 of 1..100 is 95", percentile(list(range(1, 101)), 95) == 95)
+    ok &= check("p50 of one value is that value", percentile([7.0], 50) == 7.0)
+    return ok
+
+
 def main() -> int:
     results = []
     for name, fn in [
@@ -160,6 +192,7 @@ def main() -> int:
         ("chunking", test_chunking),
         ("reciprocal rank fusion", test_rrf),
         ("bm25 tokenisation", test_bm25_tokenize),
+        ("retrieval metrics", test_metrics),
     ]:
         print(f"\n{name}")
         results.append(fn())
