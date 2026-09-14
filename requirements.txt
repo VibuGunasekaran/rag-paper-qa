@@ -1,0 +1,17 @@
+# --- Days 1-2: ingestion, indexing, retrieval ---
+requests>=2.31
+pymupdf>=1.24
+pyyaml>=6.0
+tqdm>=4.66
+numpy>=1.26
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+rank-bm25>=0.2.2
+
+# --- Day 5: generation (uncomment when you get there) ---
+# openai>=1.40
+
+# --- Day 6: serving (uncomment when you get there) ---
+# fastapi>=0.111
+# uvicorn>=0.30
+# gradio>=4.40

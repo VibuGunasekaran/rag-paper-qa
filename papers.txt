@@ -1,0 +1,30 @@
+# Seed corpus: arXiv IDs, one per line. Comments and blank lines ignored.
+#
+# THIS IS A STARTING POINT, NOT A FINISHED CORPUS.
+# Replace/extend with the papers you are actually reading for the dissertation --
+# the whole argument for this corpus is that you can judge answer correctness
+# without looking things up. ingest.py prints the resolved title for every ID,
+# so run `python -m src.ingest --fetch-only` and eyeball the list before parsing.
+
+# --- VLM architectures ---
+2103.00020   # CLIP: Learning Transferable Visual Models From Natural Language Supervision
+2301.12597   # BLIP-2
+2304.08485   # LLaVA: Visual Instruction Tuning
+2310.03744   # LLaVA-1.5: Improved Baselines with Visual Instruction Tuning
+2308.12966   # Qwen-VL
+2311.03079   # CogVLM
+
+# --- Visual token reduction / efficient VLMs (your dissertation area) ---
+2403.06764   # FastV: An Image is Worth 1/2 Tokens After Layer 2
+
+# --- Efficient inference: attention, serving, decoding ---
+2205.14135   # FlashAttention
+2307.08691   # FlashAttention-2
+2309.06180   # vLLM / PagedAttention
+2211.17192   # Fast Inference from Transformers via Speculative Decoding
+
+# --- Efficient inference: quantisation and adapters ---
+2210.17323   # GPTQ
+2306.00978   # AWQ
+2106.09685   # LoRA
+2305.14314   # QLoRA
