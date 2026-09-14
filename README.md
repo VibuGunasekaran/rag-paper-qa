@@ -7,7 +7,7 @@ faithfulness evaluation.
 > **Status: Days 1-6 complete (ingestion, indexing, retrieval, 150-question
 > gold set, 18-configuration retrieval evaluation, cited generation with
 > abstention and an LLM-judged faithfulness evaluation, and a local web app
-> serving the evaluated pipeline).**
+> serving the evaluated pipeline). Development is paused; see Future work.**
 > Every claim below has a number and an interval next to it.
 
 ---
@@ -343,6 +343,29 @@ data/                  PDFs, chunks, indexes (gitignored)
 - Front matter (title, authors, affiliations) is indexed as ordinary chunks.
 - The first dense query and the first reranked query each load a model (5-7 s
   on an M1). Latency is only meaningful after `Retriever.warmup()`.
+
+---
+
+## Future work
+
+Development is paused here. Planned next steps, most valuable first:
+
+- **Retrieval for comparative questions.** Split a comparison into one
+  sub-query per paper or method, retrieve for each, and merge, so the top 5
+  covers every side (Cov@5 is 0.21; comparative correctness is 0.58).
+- **Retrieval for paraphrased questions.** Rewrite the question into the
+  corpus's vocabulary before retrieval (paraphrased R@5 is 0.24-0.52;
+  correctness is 0.67). Measure both changes with `run_eval.py`, then re-run
+  generation on the questions whose retrieval changed.
+- **Stricter abstention.** Tighten the generation prompt so the 4 answers that
+  reported a related figure on a retrieval miss become abstentions, and re-run
+  the 29 retrieval misses to check.
+- **Judge validation.** Grade a sample with a second judge model and report
+  agreement with the current judge, to bound self-preference.
+- **Presentation.** A screenshot or GIF of the web app, a short results summary
+  at the top of this README, and a Dockerfile.
+- **Hosted demo.** Only with authentication and rate limiting, since every
+  question is a paid API call.
 
 ---
 
