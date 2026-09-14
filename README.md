@@ -87,8 +87,27 @@ Observations:
 - **Naming gap:** on the first 45 questions the most persistent miss (q017,
   missed in 15 of 18 configurations) was an evidence chunk that never names the
   method ("ST3"); the name is only in the paper title, which is not part of
-  chunk text. Prepending the paper title to each chunk before indexing is the
-  experiment below.
+  chunk text.
+
+### Experiment: prepending the paper title to every chunk
+
+Retrievers and the reranker saw `"<paper title>\n\n<chunk>"`; the stored chunk
+text and gold matching were unchanged. Built with
+`python -m src.index --all --title-prefix`, scored with
+`python eval/run_eval.py --title-prefix`, compared with
+`python eval/run_eval.py --compare eval/results.json eval/results_title_prefix.json`
+(`eval/compare_results_title_prefix.md`).
+
+- **It does not fix the miss it was built for:** q017 (ST3) is retrieved in 4
+  of 18 configurations with the title and 3 without.
+- **Across the grid the effect is small and mixed.** Of 18 paired comparisons
+  on 135 questions, two intervals exclude zero, in opposite directions: BM25 at
+  256 ranks better (MRR@10 +0.05 [+0.02, +0.08]) and dense at 1024 ranks worse
+  (MRR@10 -0.06 [-0.11, -0.01]). BM25 + rerank at 512 gains R@5 +0.05
+  [0.00, +0.10], at the edge of noise.
+- **Not adopted:** `title_prefix` stays off. One plausible reading: the repeated
+  title helps lexical matching on paper names but pulls every chunk of a paper
+  toward the same point in embedding space.
 
 ---
 
@@ -162,6 +181,12 @@ python -m src.ingest --chunk-only --chunk-size 1024
 python -m src.index --all
 python eval/run_eval.py               # 18 configs -> eval/results.md, results.json
 
+# Day 5: generation and faithfulness (Claude API) ---------------------
+cp .env.example .env                  # then add ANTHROPIC_API_KEY
+python eval/run_generation.py --dry-run   # retrieval + cost estimate, no API calls
+python eval/run_generation.py --limit 6   # smoke test across question types
+python eval/run_generation.py             # all 150 -> eval/results_generation.md
+
 # Tests (no models, no network) ---------------------------------------
 python tests/test_pipeline.py
 ```
@@ -197,9 +222,11 @@ src/config.py          config loading
 src/ingest.py          fetch, parse, section split, chunk
 src/index.py           FAISS and BM25 builders
 src/retrieve.py        dense, bm25, hybrid RRF, cross-encoder rerank
+src/generate.py        cited answers with abstention (Claude API, refusal fallbacks)
 scripts/build_gold.py  gold set authoring and validation
-tests/test_pipeline.py logic tests, no models required
-eval/                  gold_set.jsonl, run_eval.py, results.md
+tests/test_pipeline.py logic tests, no models or network required
+eval/                  gold_set.jsonl, run_eval.py (retrieval), run_generation.py +
+                       judge.py (generation, faithfulness), results*.md
 data/                  PDFs, chunks, indexes (gitignored)
 ```
 

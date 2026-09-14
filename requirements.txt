@@ -8,8 +8,9 @@ sentence-transformers>=3.0
 faiss-cpu>=1.8
 rank-bm25>=0.2.2
 
-# --- Day 5: generation (uncomment when you get there) ---
-# openai>=1.40
+# --- Day 5: generation and judging (Claude API; key in .env) ---
+anthropic>=1.5
+python-dotenv>=1.0
 
 # --- Day 6: serving (uncomment when you get there) ---
 # fastapi>=0.111

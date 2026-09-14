@@ -47,3 +47,16 @@ eval:
     comparative: 24
     paraphrased: 21
     unanswerable: 15
+
+generation:
+  model: claude-opus-5
+  judge_model: claude-opus-5
+  max_tokens: 16000
+  top_k: 5                 # retrieved chunks given to the generator
+  retrieval:               # the retrieval configuration that feeds generation
+    chunk_size: 512
+    method: hybrid
+    rerank: true
+    title_prefix: false
+  results_path: eval/results_generation.md
+  cache_path: eval/generation_cache.jsonl   # API results keyed by request hash; re-runs never pay twice

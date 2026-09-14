@@ -165,6 +165,34 @@ def test_bm25_tokenize():
     return ok
 
 
+def test_generation_helpers():
+    from types import SimpleNamespace as NS
+
+    from src.generate import _to_answer, build_user_message, inline_citations
+
+    hits = [NS(chunk_id=f"p::s00::c0{i}", title="Paper", section="Method", text=f"text {i}") for i in (1, 2, 3)]
+    msg = build_user_message("What is X?", hits)
+    ok = True
+    ok &= check("sources are numbered S1..Sk", all(f'id="S{i}"' in msg for i in (1, 2, 3)))
+    ok &= check("question follows the sources", msg.endswith("Question: What is X?"))
+    ok &= check("inline citations parsed in both styles",
+                inline_citations("A [S1][S3]. B [S12, S3]. Not a citation [1].") == [1, 3, 12])
+
+    def response(stop_reason, parsed):
+        return NS(stop_reason=stop_reason, parsed_output=parsed, model="claude-opus-5",
+                  usage=NS(to_dict=lambda: {"input_tokens": 10, "output_tokens": 5}))
+
+    ans = _to_answer(response("end_turn", NS(abstained=False, answer="X is Y [S2][S9].", cited_sources=[9, 2])),
+                     "What is X?", hits, 12.3, "claude-opus-5")
+    ok &= check("citations map to chunk ids, out-of-range numbers dropped", ans.cited_chunk_ids == ["p::s00::c02"])
+    ok &= check("usage is recorded", ans.usage == {"input_tokens": 10, "output_tokens": 5})
+    refused = _to_answer(response("refusal", None), "q", hits, 1.0, "claude-opus-5")
+    ok &= check("refusals are recorded, not counted as abstentions", refused.refused and not refused.abstained)
+    truncated = _to_answer(response("max_tokens", None), "q", hits, 1.0, "claude-opus-5")
+    ok &= check("missing structured output is a parse failure", truncated.parse_failed and not truncated.refused)
+    return ok
+
+
 def test_indexed_text():
     chunk = {"title": "ST3: Accelerating MLLMs", "text": "we avoid pruning tokens in the first three layers"}
     ok = True
@@ -212,6 +240,7 @@ def main() -> int:
         ("reciprocal rank fusion", test_rrf),
         ("bm25 tokenisation", test_bm25_tokenize),
         ("indexed text", test_indexed_text),
+        ("generation helpers", test_generation_helpers),
         ("retrieval metrics", test_metrics),
     ]:
         print(f"\n{name}")
