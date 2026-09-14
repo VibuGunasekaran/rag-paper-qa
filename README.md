@@ -317,11 +317,12 @@ data/                  PDFs, chunks, indexes (gitignored)
   256-token one. The chunk-size comparison therefore overstates the benefit of
   large chunks, and it ignores that a generator must read four times as much
   text per retrieved 1024-token chunk.
-- The judge is the same model as the generator, and its verdicts have not been
-  checked against human grading, so self-preference could inflate faithfulness
-  and correctness. The independent number check covers figures only, not
-  wording. The judge also labels some abstentions "partial" rather than
-  "abstained", which puts 3 abstentions into the "correct or partial" rate.
+- The judge is the same model as the generator, so self-preference could
+  inflate faithfulness and correctness. The author reviewed the generated
+  answers (2026-09-14), and the independent number check covers every figure,
+  but there is no formal agreement score between the judge and a human grader.
+  The judge also labels some abstentions "partial" rather than "abstained",
+  which puts 3 abstentions into the "correct or partial" rate.
 - Generation was run once; answers at a different time or with a different
   model version would vary. The 29 retrieval misses are too few to compare
   abstention against answering a neighbouring question with any precision.
