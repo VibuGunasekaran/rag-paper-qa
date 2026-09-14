@@ -8,6 +8,7 @@ trusting a number that came out of the eval.
 """
 from __future__ import annotations
 
+import re
 import sys
 import types
 from pathlib import Path
@@ -32,7 +33,7 @@ class WordCounter:
     """Stand-in for the bge tokenizer: one token per word."""
 
     def encode(self, text): return text.split()
-    def decode(self, tokens): return " ".join(tokens)
+    def spans(self, text): return [m.span() for m in re.finditer(r"\S+", text)]
 
 
 def check(name, cond):
@@ -49,6 +50,11 @@ def test_headings():
     ok &= check("sentence-like number rejected",
                 _is_heading("3 of the models were trained on ImageNet and then fine tuned.") is None)
     ok &= check("long line rejected", _is_heading("A" * 120) is None)
+    ok &= check("figure axis + body text rejected",
+                _is_heading("40 To address the above limitations, we propose PagedAt-") is None)
+    ok &= check("table row rejected", _is_heading("65 CLIP 98.4 76.2 58.5") is None)
+    ok &= check("uppercase subsection accepted",
+                _is_heading("4.2 APPLYING LORA TO TRANSFORMER") is not None)
     return ok
 
 
@@ -60,6 +66,15 @@ def test_split_sections():
         "2 Method",
         "We prune visual tokens using attention.",
         "",
+        "4.2",
+        "APPLYING LORA TO TRANSFORMER",
+        "In principle, we can apply LoRA to any subset of weight matrices.",
+        "40",
+        "To address the above limitations, we propose PagedAt-",
+        "2.47",
+        "GPT-2 L (LoRA)",
+        "2",
+        "WikiSQL (±0.5%)",
         "References",
         "[1] Someone et al.",
     ])
@@ -69,6 +84,14 @@ def test_split_sections():
     ok = True
     ok &= check("intro captured", any("Introduction" in t for t in titles))
     ok &= check("method captured", any("Method" in t for t in titles))
+    ok &= check("section number on its own line rejoined",
+                "4.2 APPLYING LORA TO TRANSFORMER" in titles)
+    ok &= check("bare number before body text stays body",
+                "To address the above limitations" in bodies
+                and not any(t.startswith("40") for t in titles))
+    ok &= check("table cells split across lines are not headings",
+                not any(t.startswith(("2.47", "2 WikiSQL")) for t in titles)
+                and "GPT-2 L (LoRA)" in bodies)
     ok &= check("references dropped", "Someone et al" not in bodies)
     ok &= check("body text preserved", "prune visual tokens" in bodies)
     return ok
@@ -93,6 +116,10 @@ def test_chunking():
     ok &= check("merged tail does not duplicate the overlap",
                 flat.count("w180") == 1 or len(merged) == 1)
     ok &= check("merged tail keeps the final token", merged[-1].split()[-1] == "w189")
+    cased = "QLoRA's 4-bit NormalFloat (NF4) type. " * 60
+    kept = chunk_section(cased, counter, chunk_size=100, overlap=15, min_tokens=40)
+    ok &= check("chunks are verbatim slices of the source text",
+                len(kept) > 1 and all(c in cased for c in kept) and "(NF4)" in kept[0])
     short = chunk_section("too short", counter, 100, 15, min_tokens=40)
     ok &= check("sub-minimum section dropped", short == [])
     return ok

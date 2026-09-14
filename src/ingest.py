@@ -194,7 +194,8 @@ def download_pdfs(papers: list[Paper], pdf_dir: Path) -> list[Paper]:
 # PDF -> section-aware text
 # --------------------------------------------------------------------------
 
-NUMBERED_HEADING = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2}){0,2})\.?\s+([A-Z][^\n]{2,70})$")
+# Section numbers look like 4, 4.2 or 3.1.2. Table values like 0.92 or 2.47 do not.
+NUMBERED_HEADING = re.compile(r"^\s*([1-9]\d?(?:\.\d){0,2})\.?\s+([A-Z][^\n]{2,70})$")
 NAMED_HEADINGS = {
     "abstract", "introduction", "related work", "background", "preliminaries",
     "method", "methods", "methodology", "approach", "our approach", "model",
@@ -204,6 +205,13 @@ NAMED_HEADINGS = {
     "conclusion and future work", "future work", "references", "bibliography",
     "acknowledgment", "acknowledgments", "acknowledgement", "acknowledgements",
     "appendix",
+}
+NUMBER_ONLY = re.compile(r"^\s*[1-9]\d?(?:\.\d){0,2}\.?\s*$")
+MAX_SECTION_NUMBER = 12
+NUMERIC_TOKEN = re.compile(r"^[+\-]?\d+(?:\.\d+)?%?$")
+NUMERIC_CELL = re.compile(r"\d\.\d|%|±")
+TRAILING_FUNCTION_WORDS = {
+    "a", "an", "and", "as", "by", "for", "in", "of", "on", "or", "the", "to", "we", "with",
 }
 ALLCAPS_HEADING = re.compile(r"^\s*([A-Z][A-Z0-9 \-&]{3,50})\s*$")
 DEHYPHEN = re.compile(r"(\w)-\n(\w)")
@@ -220,9 +228,21 @@ def _is_heading(line: str) -> str | None:
     m = NUMBERED_HEADING.match(stripped)
     if m:
         title = m.group(2).strip()
+        words = title.split()
+        top_level = int(m.group(1).split(".")[0])
         # Reject "3 dogs were counted" style false positives: headings are short
-        # and do not read as sentences.
-        if len(title.split()) <= 8:
+        # and do not read as sentences. Figure axes and table rows also match
+        # the pattern ("40 To address the above limitations, we propose PagedAt-",
+        # "65 CLIP 98.4 76.2", "2 WikiSQL (±0.5%)"), so reject implausible
+        # section numbers, numeric cells, and titles that break off mid-sentence.
+        if (
+            len(words) <= 8
+            and top_level <= MAX_SECTION_NUMBER
+            and not any(NUMERIC_TOKEN.match(w) for w in words)
+            and not NUMERIC_CELL.search(title)
+            and not title.endswith(("-", ","))
+            and words[-1].lower() not in TRAILING_FUNCTION_WORDS
+        ):
             return f"{m.group(1)} {title}"
     m = ALLCAPS_HEADING.match(stripped)
     if m and len(m.group(1).split()) <= 8:
@@ -236,7 +256,9 @@ def pdf_to_text(pdf_path: Path) -> str:
     parts: list[str] = []
     with fitz.open(pdf_path) as doc:
         for page in doc:
-            parts.append(page.get_text("text", sort=True))
+            # Native order, not sort=True: sorting orders lines by page position,
+            # which reads straight across both columns of a two-column paper.
+            parts.append(page.get_text("text", sort=False))
     text = "\n".join(parts)
     text = DEHYPHEN.sub(r"\1\2", text)          # join words split across lines
     text = re.sub(r"[ \t]+", " ", text)
@@ -249,8 +271,20 @@ def split_sections(text: str, stop_sections: set[str]) -> list[tuple[str, str]]:
     Everything from the first stop section (References etc.) onward is dropped.
     """
     sections: list[tuple[str, list[str]]] = [("Front matter", [])]
-    for raw_line in text.splitlines():
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
         heading = _is_heading(raw_line)
+        # Native reading order often puts a section number on its own line
+        # ("4.2" then "APPLYING LORA TO TRANSFORMER"). Rejoin the pair when it
+        # reads as a heading; otherwise the number stays as body text.
+        if NUMBER_ONLY.match(raw_line) and i + 1 < len(lines):
+            joined = _is_heading(f"{raw_line.strip()} {lines[i + 1].strip()}")
+            if joined:
+                heading = joined
+                i += 1
+        i += 1
         if heading:
             base = re.sub(r"^\d[\d.]*\s+", "", heading).lower().strip()
             if base in stop_sections:
@@ -298,10 +332,18 @@ class TokenCounter:
             return self._tok.encode(text, add_special_tokens=False)
         return text.split()
 
-    def decode(self, tokens: list) -> str:
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Character (start, end) of every token in ``text``.
+
+        Chunks are cut as slices of the original text at these offsets, never
+        decoded from token ids: bge's tokenizer is uncased, so decoding returns
+        lowercased text with spaces around punctuation ("4 - bit ( nf4 )").
+        """
         if self._tok is not None:
-            return self._tok.decode(tokens, skip_special_tokens=True)
-        return " ".join(tokens)
+            return self._tok(
+                text, add_special_tokens=False, return_offsets_mapping=True
+            )["offset_mapping"]
+        return [m.span() for m in re.finditer(r"\S+", text)]
 
 
 def chunk_section(
@@ -311,28 +353,29 @@ def chunk_section(
     overlap: int,
     min_tokens: int,
 ) -> list[str]:
-    tokens = counter.encode(text)
-    if not tokens:
+    spans = counter.spans(text)
+    n = len(spans)
+    if n == 0:
         return []
-    if len(tokens) <= chunk_size:
-        return [text] if len(tokens) >= min_tokens else []
+    if n <= chunk_size:
+        return [text] if n >= min_tokens else []
 
     stride = max(1, chunk_size - overlap)
-    windows: list[list] = []
+    windows: list[tuple[int, int]] = []   # [start, end) token indices
     start = 0
-    while start < len(tokens):
-        windows.append(tokens[start : start + chunk_size])
-        if start + chunk_size >= len(tokens):
+    while start < n:
+        end = min(start + chunk_size, n)
+        windows.append((start, end))
+        if end >= n:
             break
         start += stride
     # A stubby tail carries no independent meaning: fold it into its predecessor.
-    # The tail's first `overlap` tokens are already in windows[-2], so append
-    # only the genuinely new remainder (and drop it outright if there is none).
-    if len(windows) > 1 and len(windows[-1]) < min_tokens:
-        tail = windows.pop()
-        if len(tail) > overlap:
-            windows[-1] = windows[-1] + tail[overlap:]
-    return [counter.decode(w).strip() for w in windows]
+    # Its first `overlap` tokens are already in that window, so extending the
+    # predecessor to the end of the text adds only the genuinely new remainder.
+    if len(windows) > 1 and windows[-1][1] - windows[-1][0] < min_tokens:
+        windows.pop()
+        windows[-1] = (windows[-1][0], n)
+    return [text[spans[s][0] : spans[e - 1][1]].strip() for s, e in windows]
 
 
 def build_chunks(
