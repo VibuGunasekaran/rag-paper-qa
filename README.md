@@ -343,3 +343,12 @@ data/                  PDFs, chunks, indexes (gitignored)
 - Front matter (title, authors, affiliations) is indexed as ordinary chunks.
 - The first dense query and the first reranked query each load a model (5-7 s
   on an M1). Latency is only meaningful after `Retriever.warmup()`.
+
+---
+
+## License
+
+Code, evaluation scripts and results are MIT licensed (`LICENSE`). The papers
+themselves are not redistributed: `src/ingest.py` downloads them from arXiv,
+where each keeps its own license. The gold set quotes short passages from them
+for evaluation.
